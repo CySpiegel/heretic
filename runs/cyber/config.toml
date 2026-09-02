@@ -23,11 +23,11 @@ split = "train[:400]"
 column = "text"
 
 [bad_prompts]
-dataset = "prompts/cybersecurity.txt"
+dataset = "../../prompts/cybersecurity.txt"
 split = "[:320]"
 
 [scorer.KeywordRate.prompts]
-dataset = "prompts/cybersecurity.txt"
+dataset = "../../prompts/cybersecurity.txt"
 split = "[320:]"
 
 [scorer.KLDivergence.prompts]
