@@ -121,6 +121,13 @@ full_normalization_lora_rank = 3
 # of the components, then clamps the magnitudes of all components to that quantile.
 winsorization_quantile = 1.0
 
+# Upper bound of the search range for the abliteration weights (must be greater than 0.8).
+# If the best trials of a run end up with weights close to this value, the model
+# resists abliteration, and raising the bound (e.g. to 2.5) allows stronger ablation
+# at the cost of a higher risk of damaging the model. The bound can be raised when
+# continuing an existing study; the trials already run remain valid.
+max_weight_upper_bound = 1.5
+
 # Number of abliteration trials to run during optimization.
 n_trials = 200
 

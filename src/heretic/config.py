@@ -391,6 +391,18 @@ class Settings(BaseSettings):
         ),
     )
 
+    max_weight_upper_bound: float = Field(
+        default=1.5,
+        gt=0.8,
+        description=(
+            "Upper bound of the search range for the abliteration weights. "
+            "If the best trials of a run end up with weights close to this value, "
+            "the model resists abliteration, and raising the bound (e.g. to 2.5) allows "
+            "stronger ablation at the cost of a higher risk of damaging the model. "
+            "Must be greater than 0.8."
+        ),
+    )
+
     n_trials: PositiveInt = Field(
         default=200,
         description="Number of abliteration trials to run during optimization.",

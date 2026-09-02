@@ -684,7 +684,7 @@ def run():
                 trial.suggest_float(
                     f"{component}.max_weight",
                     max_weight_lower_bound,
-                    1.5,
+                    settings.max_weight_upper_bound,
                 ),
             )
             max_weight_position = trial.suggest_float(
