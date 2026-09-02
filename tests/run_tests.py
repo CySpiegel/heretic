@@ -23,6 +23,10 @@ script_directory = Path(__file__).resolve().parent
 
 project_directory = script_directory.parent
 
+# Any command-line arguments are forwarded to "uv run" so that the tests can be
+# executed against an alternative environment, e.g. "--extra xpu" for Intel GPUs.
+uv_run_arguments = sys.argv[1:]
+
 # For tracking failures as (test_name, [failed_files]) and successful runs.
 failed_tests: list[tuple[str, list[str]]] = []
 passed_tests: list[str] = []
@@ -42,6 +46,7 @@ for test_directory in script_directory.iterdir():
                 [
                     "uv",
                     "run",
+                    *uv_run_arguments,
                     "--project",
                     project_directory,
                     "--directory",

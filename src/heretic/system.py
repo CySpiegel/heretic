@@ -2,6 +2,7 @@
 # Copyright (C) 2025-2026  Philipp Emanuel Weidmann <pew@worldwidemann.com> + contributors
 
 import gc
+import glob
 import importlib.metadata
 import json
 import os
@@ -45,6 +46,29 @@ def empty_cache():
         torch.mps.empty_cache()
 
     gc.collect()
+
+
+def get_xpu_memory_usage() -> list[tuple[int, int, int]]:
+    """Returns (allocated, peak allocated, total) bytes for each XPU device."""
+
+    return [
+        (
+            torch.xpu.memory_allocated(i),  # ty:ignore[unresolved-attribute]
+            torch.xpu.max_memory_allocated(i),  # ty:ignore[unresolved-attribute]
+            torch.xpu.get_device_properties(i).total_memory,  # ty:ignore[unresolved-attribute]
+        )
+        for i in range(torch.xpu.device_count())  # ty:ignore[unresolved-attribute]
+    ]
+
+
+def reset_xpu_peak_memory_stats():
+    """Resets the peak memory statistics of all XPU devices."""
+
+    # Unlike the memory query functions, resetting the statistics requires the XPU runtime to be initialized.
+    torch.xpu.init()  # ty:ignore[unresolved-attribute]
+
+    for i in range(torch.xpu.device_count()):  # ty:ignore[unresolved-attribute]
+        torch.xpu.reset_peak_memory_stats(i)  # ty:ignore[unresolved-attribute]
 
 
 def get_nvidia_driver_version() -> str | None:
@@ -117,6 +141,30 @@ def get_xpu_driver_version() -> str | None:
         return None
     except (subprocess.CalledProcessError, FileNotFoundError):
         return None
+
+
+def format_xpu_runtime_version(raw: str | None) -> str | None:
+    """Formats the raw `torch.version.xpu` string (e.g. "20260000") as "2026.0.0"."""
+
+    if raw is not None and len(raw) == 8 and raw.isdigit():
+        return f"{raw[:4]}.{int(raw[4:6])}.{int(raw[6:8])}"
+    return raw
+
+
+def is_intel_gpu_present() -> bool:
+    """Best-effort check for Intel GPU hardware via sysfs (Linux only)."""
+
+    if platform.system() != "Linux":
+        return False
+
+    try:
+        for vendor_path in glob.glob("/sys/class/drm/renderD*/device/vendor"):
+            with open(vendor_path, encoding="utf-8") as f:
+                if f.read().strip() == "0x8086":
+                    return True
+        return False
+    except Exception:
+        return False
 
 
 def get_npu_driver_version() -> str | None:
@@ -265,12 +313,35 @@ def get_accelerator_info_dict() -> dict[str, Any]:
 
     if is_xpu_available():
         count = torch.xpu.device_count()  # ty:ignore[unresolved-attribute]
+
+        # Prefer the driver version reported by torch itself; xpu-smi (which may not
+        # be installed) is only a fallback.
+        driver_version = (
+            getattr(
+                torch.xpu.get_device_properties(0),  # ty:ignore[unresolved-attribute]
+                "driver_version",
+                None,
+            )
+            or get_xpu_driver_version()
+        )
+
         return {
             "type": "XPU",
-            "api_name": None,
-            "api_version": None,
-            "driver_version": get_xpu_driver_version(),
-            "devices": [{"name": torch.xpu.get_device_name(i)} for i in range(count)],  # ty:ignore[unresolved-attribute]
+            "api_name": "oneAPI Version",
+            "api_version": format_xpu_runtime_version(
+                getattr(torch.version, "xpu", None)
+            ),
+            "driver_version": driver_version,
+            "devices": [
+                {
+                    "name": torch.xpu.get_device_name(i),  # ty:ignore[unresolved-attribute]
+                    "vram_gb": round(
+                        torch.xpu.mem_get_info(i)[1] / (1024**3),  # ty:ignore[unresolved-attribute]
+                        2,
+                    ),
+                }
+                for i in range(count)
+            ],
         }
 
     if is_mlu_available():
@@ -331,9 +402,16 @@ def get_accelerator_info(include_warnings: bool = True) -> str:
 
     if info["type"] is None:
         suffix = " Operations will be slow." if include_warnings else ""
-        return (
-            f"[bold yellow]No GPU or other accelerator detected.{suffix}[/]\n".strip()
-        )
+        lines = [f"[bold yellow]No GPU or other accelerator detected.{suffix}[/]"]
+
+        if getattr(torch.version, "xpu", None) is None and is_intel_gpu_present():
+            lines.append(
+                "[yellow]An Intel GPU is present, but this PyTorch build has no XPU "
+                'support. Install Heretic with the "xpu" extra (e.g. uv sync --extra xpu) '
+                "to use it.[/]"
+            )
+
+        return "\n".join(lines).strip()
 
     devices = info["devices"]
     count = len(devices)
@@ -420,6 +498,14 @@ def get_package_version(name: str) -> str:
     return version_str.split("+")[0] if "+" in version_str else version_str
 
 
+# Packages that PyPI never carries a real build of (they are only published on
+# PyTorch's own wheel indexes, e.g. https://download.pytorch.org/whl/xpu). Listing
+# them in reproduce/requirements.txt would make `pip install -r requirements.txt`
+# fail, so we exclude them; the pinned torch/torchvision/torchaudio versions in
+# the same file are still enough for reproduce.py to compare against.
+PYTORCH_INDEX_ONLY_PACKAGES = {"triton-xpu", "pytorch-triton-xpu", "pytorch-triton"}
+
+
 def get_requirements_dict() -> dict[str, str]:
     """Recursively finds all direct and transitive dependencies of heretic-llm and core libraries."""
 
@@ -438,6 +524,9 @@ def get_requirements_dict() -> dict[str, str]:
         if normalized_package in visited:
             continue
         visited.add(normalized_package)
+
+        if normalized_package in PYTORCH_INDEX_ONLY_PACKAGES:
+            continue
 
         try:
             distribution = importlib.metadata.distribution(normalized_package)

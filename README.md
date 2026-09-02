@@ -108,6 +108,24 @@ Replace `Qwen/Qwen3-4B-Instruct-2507` with whatever model you want to decensor.
 > and run Heretic with `uv run heretic`, which ensures that your dependencies
 > match those used by the developers, improving reliability and security.
 
+> [!NOTE]
+> **Intel GPUs (XPU)**
+>
+> Heretic supports Intel Arc and Data Center GPUs through PyTorch's XPU backend.
+> Because the correct PyTorch build lives on a separate wheel index, from a clone
+> of the repository install with `uv sync --extra xpu` and run with
+> `uv run --extra xpu heretic ...`. The `--extra xpu` flag is needed on every
+> `uv run` invocation, or uv will revert to the PyPI (CUDA) build. If you use
+> `pip` instead, install PyTorch from https://download.pytorch.org/whl/xpu
+> yourself before `pip install heretic-llm`. The Intel GPU compute runtime
+> (Level Zero) must also be installed on your system. Multiple Intel GPUs are
+> used automatically via `device_map = "auto"`; some multimodal models cannot
+> be split across GPUs, so set `device_map = "sequential"` for those.
+> Intel GPUs do not raise recoverable out-of-memory errors, so Heretic predicts
+> the largest safe batch size instead of probing until failure; if a run still
+> ends with `UR_RESULT_ERROR_DEVICE_LOST`, lower `max_batch_size`; if you know
+> a larger batch fits, set `batch_size` explicitly.
+
 The process is fully automatic and does not require configuration; however,
 Heretic has a variety of configuration parameters that can be changed for
 greater control. Run `heretic --help` to see available command-line options,

@@ -9,7 +9,7 @@ import tempfile
 import traceback
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from importlib.metadata import version
+from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 from typing import Any, TypeVar
 
@@ -373,6 +373,41 @@ def format_hf_link(
     return link
 
 
+def get_pytorch_install_command() -> str:
+    """
+    Builds the `pip install` command for the exact PyTorch build in use.
+
+    Pure function of installed package metadata: reads `torch.__version__`
+    and, for a non-PyPI build (one with a "+suffix" like "+xpu" or "+cu128"),
+    the installed torchvision/torchaudio versions.
+    """
+
+    pytorch_version = torch.__version__
+    command = f"pip install torch=={pytorch_version}"
+
+    if "+" not in pytorch_version:
+        return command
+
+    suffix = pytorch_version.split("+")[1]
+    if not suffix:
+        return command
+
+    # torchvision/torchaudio installed via the default `pip install` are PyPI
+    # (CUDA) builds. Only pin them explicitly when they were installed from the
+    # same non-PyPI index as torch (matching "+suffix"), so the reproduction
+    # command doesn't silently mix build variants.
+    for package in ("torchvision", "torchaudio"):
+        try:
+            package_version = version(package)
+        except PackageNotFoundError:
+            continue
+        if package_version.endswith(f"+{suffix}"):
+            command += f" {package}=={package_version}"
+
+    command += f" --index-url https://download.pytorch.org/whl/{suffix}"
+    return command
+
+
 def generate_reproduce_readme(
     settings: Settings,
     checkpoint_filename: str,
@@ -384,12 +419,14 @@ def generate_reproduce_readme(
     heterogeneous_warning = ""
 
     if include_system_information:
-        if torch.cuda.is_available():
-            count = torch.cuda.device_count()
-            if count > 1:
-                device_names = {torch.cuda.get_device_name(i) for i in range(count)}
-                if len(device_names) > 1:
-                    heterogeneous_warning = """
+        cpu = get_cpu_info_dict()
+        python_env = get_python_env_info_dict()
+
+        accelerators = get_accelerator_info_dict()
+
+        devices = accelerators.get("devices", [])
+        if len(devices) > 1 and len({device["name"] for device in devices}) > 1:
+            heterogeneous_warning = """
 > [!WARNING]
 > **Heterogeneous GPUs**
 >
@@ -399,10 +436,6 @@ def generate_reproduce_readme(
 > Reproducibility *cannot* be guaranteed in this environment.
 """
 
-        cpu = get_cpu_info_dict()
-        python_env = get_python_env_info_dict()
-
-        accelerators = get_accelerator_info_dict()
         if accelerators["type"] is None:
             accelerator_report = "**No GPU or other accelerator detected.**"
         else:
@@ -483,13 +516,7 @@ def generate_reproduce_readme(
 """
 
     pytorch_version = torch.__version__
-    pytorch_install_command = f"pip install torch=={pytorch_version}"
-    if "+" in pytorch_version:
-        suffix = pytorch_version.split("+")[1]
-        if suffix:
-            pytorch_install_command += (
-                f" --index-url https://download.pytorch.org/whl/{suffix}"
-            )
+    pytorch_install_command = get_pytorch_install_command()
 
     trial_scores = trial.user_attrs["scores"]
     score_lines = "\n".join(

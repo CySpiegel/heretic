@@ -77,7 +77,13 @@ from .reproduce import (
     collect_reproducibles,
     load_reproduction_information,
 )
-from .system import empty_cache, get_accelerator_info
+from .system import (
+    empty_cache,
+    get_accelerator_info,
+    get_xpu_memory_usage,
+    is_xpu_available,
+    reset_xpu_peak_memory_stats,
+)
 from .utils import (
     ask_if_unset,
     format_duration,
@@ -91,6 +97,10 @@ from .utils import (
     print_memory_usage,
     upload_reproduce_folder,
 )
+
+# Bytes of Intel GPU memory that the batch-size benchmark leaves free, for allocator
+# fragmentation and transient tensors that the benchmark does not exercise.
+XPU_MEMORY_HEADROOM = 1024**3
 
 
 def obtain_export_strategy(
@@ -306,6 +316,16 @@ def run():
     # Silence the warning about multivariate TPE being experimental.
     warnings.filterwarnings("ignore", category=ExperimentalWarning)
 
+    # torch.svd_lowrank (used for "full" row normalization) calls torch.linalg.qr,
+    # which has no XPU kernel and falls back to CPU. That fallback is cheap for the
+    # tall, skinny matrices involved, so the warning is noise on Intel GPUs.
+    warnings.filterwarnings(
+        "ignore",
+        message="Aten Op fallback from XPU to CPU",
+        category=UserWarning,
+        module=r"torch\._lowrank",
+    )
+
     os.makedirs(settings.study_checkpoint_dir, exist_ok=True)
 
     study_checkpoint_file = os.path.join(
@@ -425,6 +445,14 @@ def run():
         print()
         print("Determining optimal batch size...")
 
+        # On Intel GPUs, running out of memory inside a kernel does not raise an exception
+        # that could be caught: the driver resets the device, and every subsequent operation
+        # fails with UR_RESULT_ERROR_DEVICE_LOST. Instead of probing until failure, we predict
+        # from the memory used by the current batch size whether the next one still fits.
+        predict_memory = is_xpu_available()
+        if predict_memory:
+            baseline_memory = [allocated for allocated, _, _ in get_xpu_memory_usage()]
+
         batch_size = 1
         best_batch_size = -1
         best_performance = -1
@@ -434,6 +462,9 @@ def run():
 
             prompts = good_prompts * math.ceil(batch_size / len(good_prompts))
             prompts = prompts[:batch_size]
+
+            if predict_memory:
+                reset_xpu_peak_memory_stats()
 
             try:
                 # Warmup run to build the computation graph so that part isn't benchmarked.
@@ -466,6 +497,20 @@ def run():
             if performance > best_performance:
                 best_batch_size = batch_size
                 best_performance = performance
+
+            if predict_memory and batch_size * 2 <= settings.max_batch_size:
+                # Activation memory grows roughly linearly with the batch size.
+                if any(
+                    baseline + 2 * (peak - baseline) > total - XPU_MEMORY_HEADROOM
+                    for baseline, (_, peak, total) in zip(
+                        baseline_memory, get_xpu_memory_usage()
+                    )
+                ):
+                    print(
+                        f"* Batch size [bold]{batch_size * 2}[/] is predicted to exceed "
+                        "the available GPU memory, stopping here"
+                    )
+                    break
 
             batch_size *= 2
 
@@ -1471,4 +1516,15 @@ def main():
             print()
             print("[red]Shutting down...[/]")
         else:
+            # A lost Intel GPU manifests as UR_RESULT_ERROR_DEVICE_LOST, sometimes wrapped
+            # in another exception, so check both the error itself and its context.
+            messages = [str(error), str(error.__context__ or "")]
+            if any("UR_RESULT_ERROR_DEVICE_LOST" in message for message in messages):
+                print()
+                print(
+                    "[yellow]The Intel GPU driver reset the device (UR_RESULT_ERROR_DEVICE_LOST). "
+                    "This usually means the GPU ran out of memory inside a kernel, which cannot be "
+                    "recovered from within the process. Reduce batch_size or max_batch_size, limit "
+                    "max_memory, or enable quantization, then restart Heretic.[/]"
+                )
             raise

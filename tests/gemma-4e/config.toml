@@ -3,6 +3,8 @@
 
 model = "tiny-random/gemma-4e"
 model_commit = "3a207ada2c2cd95e9671942e84cf47ea58f0f6af"
+# Gemma 4 cannot be split across multiple devices (see transformers modeling_gemma4), so keep it on one.
+device_map = "sequential"
 
 seed = 12345
 print_debug_information = true

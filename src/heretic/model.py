@@ -105,6 +105,9 @@ class Model:
 
         self.trusted_models = set()
 
+        # Printed at most once, even though the same failure can recur for every dtype.
+        printed_multi_device_hint = False
+
         for dtype in settings.dtypes:
             print(f"* Trying dtype [bold]{dtype}[/]...")
 
@@ -157,6 +160,18 @@ class Model:
                     print(f"* [red]Failed:\n{formatted}[/]")
                 else:
                     print(f"* [red]Failed ({formatted})[/]")
+
+                if (
+                    not printed_multi_device_hint
+                    and "Expected all tensors to be on the same device" in str(error)
+                    and settings.device_map == "auto"
+                ):
+                    printed_multi_device_hint = True
+                    print(
+                        "[yellow]This model may not support being split across multiple "
+                        'devices. Try setting device_map = "sequential" (or a single '
+                        "device) in your configuration.[/]"
+                    )
 
                 continue
 

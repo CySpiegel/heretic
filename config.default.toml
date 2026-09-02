@@ -22,10 +22,13 @@ dtypes = [
 quantization = "none"
 
 # Device map to pass to Accelerate when loading the model.
+# "auto" balances the model across all available accelerators (CUDA, ROCm, XPU, ...).
+# Use "sequential" to fill the first accelerator before spilling over to the next one,
+# which is required for some multimodal models that cannot be split across devices.
 device_map = "auto"
 
-# Maximum memory to allocate per device.
-# max_memory = { "0" = "20GB", "cpu" = "64GB" }
+# Maximum memory to allocate per device. Keys are accelerator indices or "cpu".
+# max_memory = { "0" = "20GB", "1" = "20GB", "cpu" = "64GB" }
 
 # Whether to move intermediate analysis tensors (such as residuals and logprobs)
 # to CPU memory as soon as possible to reduce peak VRAM usage.
